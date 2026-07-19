@@ -1,0 +1,68 @@
+name: Build TWRP for Xiaomi 14T Pro (rothko)
+
+on:
+  workflow_dispatch: # 允许在 GitHub 页面手动触发编译
+  push:
+    branches:
+      - twrp-14.1_a16 # 当推送到此分支时自动触发（可根据您的实际主分支名称进行调整或移除此项）
+
+jobs:
+  build:
+    name: Build TWRP Recovery
+    runs-on: ubuntu-22.04 # 使用 Ubuntu 22.04 以获得更好的现代 Android 编译兼容性
+
+    steps:
+      # 1. 检出当前设备树仓库到指定的工作区路径
+      - name: Checkout Device Tree
+        uses: actions/checkout@v4
+        with:
+          path: workspace/device/xiaomi/rothko
+          fetch-depth: 0
+
+      # 2. 安装编译 AOSP/TWRP 所需的系统依赖
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git git-lfs gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev \
+            lib32z1-dev liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev \
+            libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
+            squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip repo
+
+      # 3. 配置 Git 用户信息（Repo 同步必需）
+      - name: Configure Git
+        run: |
+          git config --global user.email "action@github.com"
+          git config --global user.name "GitHub Action"
+
+      # 4. 初始化 Repo (使用 TWRP Official Minimal Manifest)
+      - name: Initialize Repo
+        run: |
+          cd workspace
+          # 注意：当前默认使用 twrp-14.1 分支。若您的设备树实际基于 Android 15 或更高版本，
+          # 请将 "-b twrp-14.1" 修改为对应的分支名称（例如 "twrp-15.0" 或 "android-14.1"）
+          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git -b twrp-14.1
+
+      # 5. 同步源码
+      - name: Sync Repo
+        run: |
+          cd workspace
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+
+      # 6. 编译 TWRP Recovery
+      - name: Build TWRP
+        run: |
+          cd workspace
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          lunch twrp_rothko-eng
+          mka recoveryimage -j$(nproc --all)
+
+      # 7. 上传编译产物
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TWRP-rothko-recovery
+          path: workspace/out/target/product/rothko/*.img
+          retention-days: 7 # 产物在 GitHub 服务器上保留 7 天
