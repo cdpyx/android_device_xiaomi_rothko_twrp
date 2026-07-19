@@ -4,12 +4,12 @@ on:
   workflow_dispatch: # 允许在 GitHub 页面手动触发编译
   push:
     branches:
-      - twrp-14.1_a16 # 当推送到此分支时自动触发（可根据您的实际主分支名称进行调整或移除此项）
+      - twrp-14.1_a16 # 当推送到此分支时自动触发（可根据您的实际主分支名称调整）
 
 jobs:
   build:
     name: Build TWRP Recovery
-    runs-on: ubuntu-22.04 # 使用 Ubuntu 22.04 以获得更好的现代 Android 编译兼容性
+    runs-on: ubuntu-22.04 # Ubuntu 22.04 提供了更好的现代 Android 编译兼容性
 
     steps:
       # 1. 检出当前设备树仓库到指定的工作区路径
@@ -36,19 +36,19 @@ jobs:
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
 
-      # 4. 初始化 Repo (使用 TWRP Official Minimal Manifest)
+      # 4. 初始化 Repo (✅ 已修正：使用适用于 Android 10+ 的 AOSP Manifest)
       - name: Initialize Repo
         run: |
           cd workspace
-          # 注意：当前默认使用 twrp-14.1 分支。若您的设备树实际基于 Android 15 或更高版本，
-          # 请将 "-b twrp-14.1" 修改为对应的分支名称（例如 "twrp-15.0" 或 "android-14.1"）
-          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_omni.git -b twrp-14.1
+          # 使用 platform_manifest_twrp_aosp，它包含 twrp-14.1 分支
+          repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.1
 
       # 5. 同步源码
       - name: Sync Repo
         run: |
           cd workspace
-          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+          # 添加 -q 减少日志输出，避免 GitHub Actions 日志超限
+          repo sync -c -q -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
       # 6. 编译 TWRP Recovery
       - name: Build TWRP
@@ -56,6 +56,7 @@ jobs:
           cd workspace
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
+          export LC_ALL=C # 防止部分脚本因本地化设置报错
           lunch twrp_rothko-eng
           mka recoveryimage -j$(nproc --all)
 
