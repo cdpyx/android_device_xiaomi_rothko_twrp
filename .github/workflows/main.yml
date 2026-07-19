@@ -4,22 +4,29 @@ on:
   workflow_dispatch: # 允许在 GitHub 页面手动触发编译
   push:
     branches:
-      - twrp-14.1_a16 # 当推送到此分支时自动触发（可根据您的实际主分支名称调整）
+      - twrp-14.1_a16 
 
 jobs:
   build:
     name: Build TWRP Recovery
-    runs-on: ubuntu-22.04 # Ubuntu 22.04 提供了更好的现代 Android 编译兼容性
+    runs-on: ubuntu-22.04
 
     steps:
-      # 1. 检出当前设备树仓库到指定的工作区路径
+      # 1. 检出当前设备树仓库
       - name: Checkout Device Tree
         uses: actions/checkout@v4
         with:
           path: workspace/device/xiaomi/rothko
           fetch-depth: 0
 
-      # 2. 安装编译 AOSP/TWRP 所需的系统依赖
+      # 2. 设置 ccache 缓存 (加速编译并提高稳定性)
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-${{ github.ref }}
+          max-size: 2G
+
+      # 3. 安装编译依赖
       - name: Install Dependencies
         run: |
           sudo apt-get update
@@ -30,40 +37,49 @@ jobs:
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
             squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip repo
 
-      # 3. 配置 Git 用户信息（Repo 同步必需）
+      # 4. 配置 Git
       - name: Configure Git
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
 
-      # 4. 初始化 Repo (✅ 已修正：使用适用于 Android 10+ 的 AOSP Manifest)
+      # 5. 初始化 Repo (使用正确的 AOSP Manifest)
       - name: Initialize Repo
         run: |
           cd workspace
-          # 使用 platform_manifest_twrp_aosp，它包含 twrp-14.1 分支
           repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.1
 
-      # 5. 同步源码
+      # 6. 同步源码 (移除 -q 以便在失败时能看到完整的错误日志)
       - name: Sync Repo
         run: |
           cd workspace
-          # 添加 -q 减少日志输出，避免 GitHub Actions 日志超限
-          repo sync -c -q -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
+          repo sync -c -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-      # 6. 编译 TWRP Recovery
+      # 7. 编译 TWRP Recovery
       - name: Build TWRP
         run: |
           cd workspace
+          
+          # 启用 ccache
+          export USE_CCACHE=1
+          export CCACHE_EXEC=/usr/bin/ccache
+          ccache -M 2G
+          
+          # 设置环境变量
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
-          export LC_ALL=C # 防止部分脚本因本地化设置报错
+          export LC_ALL=C
+          
+          # 执行 lunch (已确认您的设备树中定义为 twrp_rothko-eng)
           lunch twrp_rothko-eng
+          
+          # 开始编译
           mka recoveryimage -j$(nproc --all)
 
-      # 7. 上传编译产物
+      # 8. 上传编译产物
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: TWRP-rothko-recovery
           path: workspace/out/target/product/rothko/*.img
-          retention-days: 7 # 产物在 GitHub 服务器上保留 7 天
+          retention-days: 7
