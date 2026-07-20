@@ -1,26 +1,25 @@
 name: Build TWRP for Xiaomi 14T Pro (rothko)
 
 on:
-  workflow_dispatch: # 允许在 GitHub 页面手动触发编译
+  workflow_dispatch:
   push:
     branches:
-      - twrp-14.1_a16 # 当推送到此分支时自动触发
+      - twrp-14.1_a16
 
 jobs:
   build:
     name: Build TWRP Recovery
     runs-on: ubuntu-22.04
+    timeout-minutes: 360 # 显式设置最大运行时间为 6 小时，防止过早被判定超时
 
     steps:
-      # 1. 检出当前设备树仓库到指定的工作区路径
       - name: Checkout Device Tree
         uses: actions/checkout@v4
         with:
           path: workspace/device/xiaomi/rothko
           fetch-depth: 0
 
-      # 2. 安装编译 AOSP/TWRP 所需的系统依赖
-      - name: Install Dependencies
+      - name: Install Dependencies & Setup Swap
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,25 +29,29 @@ jobs:
             libssl-dev libxml2 libxml2-utils lzop pngcrush rsync schedtool \
             squashfs-tools xsltproc zip zlib1g-dev python3 python3-pip repo
 
-      # 3. 配置 Git 用户信息（Repo 同步必需）
+          # ✅ 核心优化 1：创建 8GB 的 Swap 虚拟内存，防止 soong_build 链接阶段因内存不足 (OOM) 被杀
+          echo "Setting up 8GB swap space..."
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          sudo swapon --show
+
       - name: Configure Git
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
 
-      # 4. 初始化 Repo (使用适用于 Android 10+ 的 AOSP Manifest)
       - name: Initialize Repo
         run: |
           cd workspace
           repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.1
 
-      # 5. 同步源码
       - name: Sync Repo
         run: |
           cd workspace
           repo sync -c -q -j$(nproc --all) --force-sync --no-clone-bundle --no-tags
 
-      # 6. 编译 TWRP Recovery
       - name: Build TWRP
         run: |
           cd workspace
@@ -56,13 +59,14 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           
-          # ✅ 核心修复：Android 14+ 强制要求 <product>-<release>-<variant> 格式
-          # ap2a 是 Android 14 QPR1/QPR2 的通用 release 标识，可完美绕过两段式 lunch 报错
+          # Android 14+ 强制要求 <product>-<release>-<variant> 格式
           lunch twrp_rothko-ap2a-eng
           
-          mka recoveryimage -j$(nproc --all)
+          # ✅ 核心优化 2：限制并发数为 4。
+          # 虽然 $(nproc --all) 更快，但在 7GB 内存限制下，链接阶段极易 OOM。
+          # -j4 能在可接受的时间内最大程度保证编译稳定性。
+          mka recoveryimage -j4
 
-      # 7. 上传编译产物
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
